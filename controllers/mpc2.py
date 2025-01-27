@@ -44,8 +44,18 @@ class controller(BaseController):
    vs the target lateral acceleration
 
    '''
-   def cost(current_lataccel):
-      return 'cost' 
+   def cost(current_lataccel, target_lataccel, future_lataccel, future_lataccel_predict):
+      
+      # Compute current error
+      current_error = current_lataccel - target_lataccel
+
+      # Compute future error
+      future_error = np.sum(np.subtract(future_lataccel, future_lataccel_predict))
+
+      # Total error
+      total_error = current_error + future_error
+
+      return total_error
    
    '''
    Here I will define the optimization for the steering
