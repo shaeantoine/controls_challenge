@@ -1,6 +1,7 @@
 from . import BaseController
 import numpy as np
 from random import uniform
+from scipy import optimize
 
 class controller(BaseController):
    def __init__(self):
@@ -61,8 +62,19 @@ class controller(BaseController):
    Here I will define the optimization for the steering
    over the next 10 steps
    '''
-   def optimize():
-      return 'optimal'
+   def optimize(self):
+      # Generate random steering commands
+      steering_commands = np.zeros(10)
+
+      # compute the minimal value 
+      res = optimize.minimize(self.cost,
+                              steering_commands,
+                              method='nelder-mead')
+      
+      # Return only the next steering command 
+      optimal_steer = res.x[0]
+
+      return optimal_steer
     
 
    '''
