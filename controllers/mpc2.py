@@ -4,16 +4,78 @@ from random import uniform
 from scipy import optimize
 
 class Controller(BaseController):
-   def __init__(self):
-      "something"
+   """
+   Initialize simplified vehicle model using roll dynamics
+   
+   Args:
+      mass (float): Vehicle mass [kg]
+      roll_center_height (float): Height of roll center from ground [m]
+      roll_stiffness (float): Total roll stiffness [Nm/rad]
+      roll_damping (float): Roll damping coefficient [Nms/rad]
+      wheelbase (float): Vehicle wheelbase [m]
+      steering_ratio (float): Steering ratio (steering wheel to road wheel)
+   """
+   def __init__(self, mass = 1500,
+                  roll_center_height = 0.5,
+                  roll_stiffness = 36000,
+                  roll_damping = 4000,
+                  wheelbase = 2.7,
+                  steering_ratio = 15.0):
+      self.mass = mass
+      self.h_rc = roll_center_height
+      self.K_roll = roll_stiffness
+      self.C_roll = roll_damping
+      self.wheelbase = wheelbase
+      self.steering_ratio = steering_ratio
+      self.g = 9.81  # gravitational acceleration
+      
 
-   '''
-   The system dynamics of the car will likely be varied
-   since the data is from a bunch of different cars in 
-   a bunch of different conditions. SOURCE OF ERRORS
-   '''
-   def dynamics(self, lataccel, steering):
-      return lataccel + steering  
+   """
+   Aim:
+      The system dynamics of the car will likely be varied
+      since the data is from a bunch of different cars in 
+      a bunch of different conditions. SOURCE OF ERRORS
+
+   Args:
+      steering_angle (float): Steering wheel angle [rad]
+      current_lat_acc (float): Current lateral acceleration [m/s^2]
+      roll_lat_acc (float): Lateral acceleration due to roll [m/s^2]
+      ego_velocity (float): Vehicle forward velocity [m/s]
+      ego_acceleration (float): Vehicle forward acceleration [m/s^2]
+      dt (float): Time step [s]
+         
+   Returns:
+      float: Predicted lateral acceleration [m/s^2]
+   """
+   def dynamics(self, steering_angle, current_lat_acc, roll_lat_acc, 
+                                    ego_velocity, ego_acceleration, dt):
+         # Convert steering wheel angle to road wheel angle
+         road_wheel_angle = steering_angle / self.steering_ratio
+         
+         # Calculate steering-induced lateral acceleration (bicycle model approximation)
+         # Using simplified steady-state relationship
+         if abs(ego_velocity) > 0.1:  # Prevent division by zero
+            steering_lat_acc = (ego_velocity**2 * road_wheel_angle) / self.wheelbase
+         else:
+            steering_lat_acc = 0
+            
+         # Calculate roll moment including steering effects
+         total_lat_acc = current_lat_acc + steering_lat_acc
+         roll_moment = self.mass * self.h_rc * total_lat_acc
+         
+         # Calculate roll angle and roll rate
+         roll_angle = roll_moment / self.K_roll
+         roll_rate = roll_angle / dt
+         
+         # Calculate roll damping effect
+         damping_moment = self.C_roll * roll_rate
+         
+         # Combine all effects for lateral acceleration prediction
+         predicted_lat_acc = (total_lat_acc + 
+                           roll_lat_acc +
+                           (damping_moment / (self.mass * self.h_rc)))
+         
+         return predicted_lat_acc
 
 
    '''
@@ -22,10 +84,6 @@ class Controller(BaseController):
    based on the system dynamics model 
    '''
    def predict(self, steer_command, current_lataccel):
-      # We need to generate some steering angle for the next 10 steps
-      # steer_command = [(uniform(-1, 1)) for i in range(10)]
-      #future_lataccel_predict = np.zeros(10)
-
       future_lataccel_predict = np.zeros(len(steer_command))
 
       '''
@@ -55,7 +113,6 @@ class Controller(BaseController):
       future_lataccel_predict = self.predict(steer_commands, current_lataccel)
 
       # Compute future error
-      #future_error = np.sum(np.subtract(future_lataccel_predict, future_lataccel[:10])) # Not sure if the arguments are the right way around? 
       future_error = np.sum(np.subtract(future_lataccel_predict, future_lataccel)) # Not sure if the arguments are the right way around? 
 
       # Total error
@@ -63,33 +120,45 @@ class Controller(BaseController):
 
       return total_error
    
-
+   
    '''
    Here I will define the optimization for the steering
    over the next 10 steps
    '''
-   def optimize(self, current_lataccel, target_lataccel, future_lataccel):
-      # Generate random steering commands
-      #steer_commands = np.zeros(10)
+   def optimize(self, current_lataccel, target_lataccel, state, future_plan):
 
-      # Generate random steering commands, the size of future_lataccel
-      steer_commands = np.zeros(len(future_lataccel))
+      # Future plan arrays
+      future_lataccel_targets = future_plan.lataccel[:10] # currently just limiting to 10 
+      future_roll_lataccel = future_plan.roll_lataccel[:10]
+      future_velo = future_plan.v_ego[:10]
+      future_accel = future_plan.a_ego[:10]
+      
+      # State variables
+      current_roll_lataccel = state.roll_lataccel
+      current_velo = state.v_ego
+      current_accel = state.a_ego
 
+
+      # Generate empty steer command array
+      steer_commands = np.zeros(len(future_lataccel_targets))
+
+      
       # compute the minimal value 
-      res = optimize.minimize(self.cost,
+      optimal_steering = optimize.minimize(self.cost,
                               steer_commands,
                               args=(current_lataccel, 
                                     target_lataccel,
-                                    future_lataccel),
+                                    future_lataccel_targets),
                               method='nelder-mead')
       
       # Return only the next steering command 
       try:
-         optimal_steer = res.x[0]
+         optimal_steer = optimal_steering.x[0]
       except: 
          return 0.0
 
       return optimal_steer
+
 
 
    '''
@@ -108,19 +177,13 @@ class Controller(BaseController):
    for the next 10 steps
    '''
    def update(self, target_lataccel, current_lataccel, state, future_plan):
-      # Break apart state
-      current_roll_lataccel = state.roll_lataccel
-      current_velocity = state.v_ego
-      current_acceleration = state.a_ego 
-
-      # Break apart future_plan
-      future_lataccel = future_plan.lataccel
-      #future_plan.roll_lataccel # I don't suspect I'll use this 
-      future_plan.v_ego
-      future_plan.a_ego
 
       # Calling optimize 
-      optimal_steer_command = self.optimize(current_lataccel, target_lataccel, future_lataccel)
+      optimal_steer_command = self.optimize(current_lataccel, 
+                                            target_lataccel, 
+                                            state, 
+                                            future_plan)
+
 
       return optimal_steer_command
    
